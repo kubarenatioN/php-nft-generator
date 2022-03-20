@@ -1,9 +1,15 @@
 <?
+	require_once "db/connection.php";
+
 	$CONST = (object)[
 		'editionSize' => 10,
 		'rootPath' => str_replace(array("\\"), "/", __DIR__),
 		'dnaDelimiter' => '-',
-		'rarityDelimiter' => '#'
+		'rarityDelimiter' => '#',
+		'collectionName' => 'CrazyEyes',
+		'basePath' => 'https://storage.googleapis.com/nfkingdom.appspot.com',
+		'imgW' => 512,
+		'imgH' => 512,
 	];
 
 	$LAYERS = [
@@ -18,8 +24,8 @@
 
 	$DNA_LIST = [];
 
-	$IMG_W = 512;
-	$IMG_H = 512;
+	$IMG_W = $CONST->imgW;
+	$IMG_H = $CONST->imgH;
 	$IMG_BASE = imagecreatetruecolor($IMG_W, $IMG_H);
 
 	function array_find($xs, $f) {
@@ -87,6 +93,7 @@
 	function generateDna($layers) {
 		global $CONST;
 		$dnaNodes = [];
+		$rarityRates = [];
 		foreach ($layers as $k => $v) {
 			$totalWeight = 0;
 			$layer_pics = $v['pictures'];
@@ -103,6 +110,8 @@
 					$pic = $layer_pics[$i];
 					$pic_id = $pic['id'];
 					$pic_filename = $pic['filename'];
+					$rarity = $pic['weight'];
+					array_push($rarityRates, $rarity);
 					array_push($dnaNodes, "$pic_id:$pic_filename");
 					break;
 				}
@@ -110,7 +119,8 @@
 		}
 		$dna = implode($CONST->dnaDelimiter, $dnaNodes);
 		// echo $dna."<br>";
-		return $dna;
+		$rarity = array_sum($rarityRates) / count($rarityRates);
+		return ["dna" => $dna, "rarity" => $rarity];
 	}
 
 	function getDnaNodeId($dna_node) {
@@ -142,10 +152,27 @@
 		// configurate all layers and pictures
 		$layers = setupLayers();
 
-		// create nft
+		//open connection
+		$c = connect();
+		$type = "creatures";
+		$qCreateCollection = "insert into collections (name, type) values ('$CONST->collectionName', '$type')";
+		$qGetId = "select LAST_INSERT_ID()";
+		$new_collection = $c->query($qCreateCollection);
+		$new_collection_id = $c->query($qGetId)->fetch_assoc()['LAST_INSERT_ID()'];
+		// var_dump($new_collection);
+		// var_dump($new_collection_id);
+		if (!$new_collection) {
+			disconnect($c);
+			return;
+		}
+
+		// create unique nft picture & write to database
 		for ($i=1; $i <= $CONST->editionSize; $i++) { 
 			// get unique nft dna
-			$dna = generateDna($layers);
+			$gen = generateDna($layers);
+			$dna = $gen['dna'];
+			$rarity = $gen['rarity'];
+			$price = 500 + 500 * (1 - $rarity / 100) * rand(10, 15) / 10;
 
 			// if dna exists, repeat iteration
 			if (!isDnaUnique($dna)) {
@@ -164,16 +191,31 @@
 				$img = imagecreatefrompng($src);
 
 				// header('Content-type: image/png');
-				imagecopy($output_image, $img, 0, 0, 0, 0, 512, 512);
+				imagecopy($output_image, $img, 0, 0, 0, 0, $CONST->imgW, $CONST->imgH);
 			}
+			$filename = "$i.png";
+
+			// add db insert here
+			$image_url = "$CONST->basePath/$CONST->collectionName/$filename";
 			
-			imagepng($output_image, "$CONST->rootPath/results/test1/$i.png");
+			// echo "$rarity, ";
+			echo $new_collection_id."<br>";
+			$qInsertItem = "insert into items (collection_id, rarity, price, image_url) values ('$new_collection_id', '$rarity', '$price', '$image_url')";
+			$res = $c->query($qInsertItem);
+			if (!$res) {
+				var_dump('ERROR: Insertion token data in database.');
+				disconnect($c);
+				return;
+			}
+
+			imagepng($output_image, "$CONST->rootPath/results/$CONST->collectionName/$filename");
 			// imagedestroy($output_image);
 		}
 
+		disconnect($c);
 	}
 
 	create();
-	echo "All done!<br>";
+	echo "All done";
 
 ?>
