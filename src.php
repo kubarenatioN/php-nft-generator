@@ -1,26 +1,39 @@
 <?
 	require_once "db/connection.php";
 
+	ini_set('max_execution_time', '3600'); //3600 seconds - 1 hour
+
 	$CONST = (object)[
-		'editionSize' => 10,
+		'editionSize' => 324,
 		'rootPath' => str_replace(array("\\"), "/", __DIR__),
 		'dnaDelimiter' => '-',
 		'rarityDelimiter' => '#',
-		'collectionName' => 'CrazyEyes',
+		'collectionName' => 'Beer Mages',
 		'basePath' => 'https://storage.googleapis.com/nfkingdom.appspot.com',
 		'imgW' => 512,
 		'imgH' => 512,
+		'collectionLayersFolder' => 'mages',
+		'collectionBasePrice' => 1000,
 	];
 
 	$LAYERS = [
-		"Background",
-		"Eyeball",
-		"Eye color",
-		"Iris",
-		"Shine",
-		"Bottom lid",
-		"Top lid",
+		'Background',
+		'Weapon',
+		'Body',
+		'Face',
+		'Hood',
+		'Beard',
+		'Power',
 	];
+	// $LAYERS = [
+	// 	"Background",
+	// 	"Eyeball",
+	// 	"Eye color",
+	// 	"Iris",
+	// 	"Shine",
+	// 	"Bottom lid",
+	// 	"Top lid",
+	// ];
 
 	$DNA_LIST = [];
 
@@ -38,7 +51,11 @@
 
 	function isDnaUnique($dna) {
 		global $DNA_LIST;
-		return !in_array($dna, $DNA_LIST);
+		$isUnique = !in_array($dna, $DNA_LIST);
+		if ($isUnique) {
+			array_push($DNA_LIST, $dna);
+		}
+		return $isUnique;
 	}
 
 	function cleanName($name) {
@@ -52,7 +69,8 @@
 		global $CONST;
 		$nameWithoutExt = substr($picname, 0, -4);
 		$rarity = explode($CONST->rarityDelimiter, $nameWithoutExt)[1];
-		$rarity = is_null($rarity) ? 1 : $rarity;
+		$rarity = is_null($rarity) ? 100 : $rarity;
+		var_dump($rarity);
 		return $rarity;
 	}
 
@@ -82,7 +100,7 @@
 		$layers = array_map(function($l, $i) use ($CONST) {
 			return [
 				"order" => $i,
-				"pictures" => getLayerPictures("$CONST->rootPath/layers/$l"),
+				"pictures" => getLayerPictures("$CONST->rootPath/$CONST->collectionLayersFolder/$l"),
 				"name" => $l,
 			];
 		}, $LAYERS, array_keys($LAYERS));
@@ -94,14 +112,20 @@
 		global $CONST;
 		$dnaNodes = [];
 		$rarityRates = [];
+		$collectionTotalWeight = 0;
 		foreach ($layers as $k => $v) {
 			$totalWeight = 0;
 			$layer_pics = $v['pictures'];
+			$layer_size = count($layer_pics);
+
+			// echo "<b>Layer {$v['name']}</b><br>";
 
 			// summarize weights of all pictures of a layers
 			foreach ($layer_pics as $k => $pic) {
 				$totalWeight += (int)$pic['weight'];
+				// echo "layer_fragment rarity: {$pic['weight']}<br>";
 			}
+		
 
 			$accumulator = rand(0, $totalWeight);
 			for ($i=0; $i < count($layer_pics); $i++) {
@@ -110,16 +134,26 @@
 					$pic = $layer_pics[$i];
 					$pic_id = $pic['id'];
 					$pic_filename = $pic['filename'];
-					$rarity = $pic['weight'];
-					array_push($rarityRates, $rarity);
+					if ($layer_size > 1) {
+						$rarity = $pic['weight'] / $totalWeight * 100;
+						array_push($rarityRates, $rarity);
+						$collectionTotalWeight += $totalWeight;
+					}
 					array_push($dnaNodes, "$pic_id:$pic_filename");
 					break;
 				}
 			}
+			// if ($layer_size > 1) {
+			// 	$r = $pic['weight'] / $totalWeight * 100;
+			// 	echo "item rarity: $r<br>";
+			// } else {
+			// 	echo "one item layer<br>";
+			// }
 		}
 		$dna = implode($CONST->dnaDelimiter, $dnaNodes);
-		// echo $dna."<br>";
+		$t = array_sum($rarityRates);
 		$rarity = array_sum($rarityRates) / count($rarityRates);
+		// echo "<b>Collection total weight:</b> $collectionTotalWeight, item total weight: $t, <b>Rarity:</b> $rarity<br><br>";
 		return ["dna" => $dna, "rarity" => $rarity];
 	}
 
@@ -167,12 +201,13 @@
 		}
 
 		// create unique nft picture & write to database
-		for ($i=1; $i <= $CONST->editionSize; $i++) { 
+		$i = 1;
+		while ($i <= $CONST->editionSize) { 
 			// get unique nft dna
 			$gen = generateDna($layers);
 			$dna = $gen['dna'];
 			$rarity = $gen['rarity'];
-			$price = 500 + 500 * (1 - $rarity / 100) * rand(10, 15) / 10;
+			$price = 200 + $CONST->collectionBasePrice * (1 - $rarity / 100) * rand(99, 101) / 100;
 
 			// if dna exists, repeat iteration
 			if (!isDnaUnique($dna)) {
@@ -195,11 +230,12 @@
 			}
 			$filename = "$i.png";
 
-			// add db insert here
-			$image_url = "$CONST->basePath/$CONST->collectionName/$filename";
+			// format collection name
+			$col_name_formatted = implode("-", explode(" ", $CONST->collectionName));
+			$image_url = "$CONST->basePath/$col_name_formatted/$filename";
 			
 			// echo "$rarity, ";
-			echo $new_collection_id."<br>";
+			// echo $new_collection_id."<br>";
 			$qInsertItem = "insert into items (collection_id, rarity, price, image_url) values ('$new_collection_id', '$rarity', '$price', '$image_url')";
 			$res = $c->query($qInsertItem);
 			if (!$res) {
@@ -210,12 +246,14 @@
 
 			imagepng($output_image, "$CONST->rootPath/results/$CONST->collectionName/$filename");
 			// imagedestroy($output_image);
+
+			$i += 1;
 		}
 
-		disconnect($c);
+		// disconnect($c);
 	}
 
 	create();
 	echo "All done";
-
+	print_r($DNA_LIST)
 ?>
